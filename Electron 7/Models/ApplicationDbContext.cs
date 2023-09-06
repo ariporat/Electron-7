@@ -1,6 +1,14 @@
-﻿namespace Electron_7.Models
+﻿using Microsoft.EntityFrameworkCore;
+
+namespace Electron_7.Models
 {
-	public class ApplicationDbContext
+	public class ApplicationDbContext : DbContext
 	{
+		public DbSet<User> Users { get; set; }
+
+		public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options)
+			: base(options)
+		{
+		}
 	}
 }

@@ -1,4 +1,6 @@
 
+using Electron_7.Models;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
@@ -8,8 +10,11 @@ using System.Text;
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
-
+//add please
 builder.Services.AddControllers();
+builder.Services.AddDbContext<ApplicationDbContext>(options =>
+	options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddHttpContextAccessor();
@@ -24,6 +29,15 @@ builder.Services.AddSwaggerGen(options =>
 	});
 
 	options.OperationFilter<SecurityRequirementsOperationFilter>();
+});
+builder.Services.AddCors(options =>
+{
+	options.AddDefaultPolicy(builder =>
+	{
+		builder.AllowAnyOrigin()
+			   .AllowAnyMethod()
+			   .AllowAnyHeader();
+	});
 });
 builder.Services.AddAuthentication().AddJwtBearer(options =>
 {
@@ -47,7 +61,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
-
+app.UseCors();
 app.UseAuthorization();
 
 app.MapControllers();

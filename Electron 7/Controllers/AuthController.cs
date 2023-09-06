@@ -7,33 +7,51 @@ using Microsoft.IdentityModel.Tokens;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Cryptography;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.EntityFrameworkCore;
+using Azure.Core;
 
 namespace Electron_7.Controllers
 {
 	public class AuthController : Controller
 	{
 
-		public static User user = new User();
+		
 		private readonly IConfiguration _configuration;
-		public AuthController(IConfiguration configuration)
+		private readonly ApplicationDbContext _context;
+		public AuthController(IConfiguration configuration,ApplicationDbContext context)
 		{
+			_context = context;
 			_configuration = configuration;
 		}
 
 		
 		[HttpPost("register")]
-		public ActionResult<User> Register(UserDto request)
+		public async Task<ActionResult<User>> Register(UserDto request)
 		{
+			var existingUser = await _context.Users.FirstOrDefaultAsync(u => u.Username == request.Username);
+			if (existingUser != null)
+			{
+				return BadRequest("Username is taken.");
+			}
 			string passwordHash = BCrypt.Net.BCrypt.HashPassword(request.Password);
-			user.Username = request.Username;
-			user.PasswordHash = passwordHash;
-			user.IsAdmin = request.IsAdmin;
-			return Ok(user);
+			User newUser = new User
+			{
+				Username = request.Username,
+				PasswordHash = passwordHash,
+				IsAdmin = request.IsAdmin
+			};
+
+			_context.Users.Add(newUser); 
+			await _context.SaveChangesAsync(); 
+
+			return Ok(newUser);
+
 		}
 		[HttpPost("login")]
-		public ActionResult<User> Login(UserFli request)
+		public async Task<ActionResult<User>> Login(UserFli request)
 		{
-			if (user.Username != request.Username)
+			User ?user = await _context.Users.FirstOrDefaultAsync(u => u.Username == request.Username);
+			if (user == null)
 			{
 				return BadRequest("User not found.");
 			}
@@ -45,16 +63,29 @@ namespace Electron_7.Controllers
 
 			string token = CreateToken(user);
 			var refreshtoken = GenerateRefreshToken();
-			SetRefreshToken(refreshtoken);
+			await SetRefreshToken(user, refreshtoken);
 
-			return Ok(token);
+
+			return Ok(new
+			{
+				token,
+				refreshToken = new
+				{
+					token = refreshtoken.Token,
+					expires = refreshtoken.Expired
+				}
+			});
 		}
 
 		[HttpPost("refresh-token")]
-		public async Task<ActionResult<string>> RefreshToken() 
+		public async Task<ActionResult<string>> RefreshToken(string username,string refreshtoken) 
 		{
-			var refreshToken = Request.Cookies["refreshToken"];
-			if (!user.RefreshToken.Equals(refreshToken))
+			if(username==null)
+			{ return BadRequest("username is null"); }
+			User? user = await _context.Users.FirstOrDefaultAsync(u => u.Username == username);
+			;
+			string decodedToken = Uri.UnescapeDataString(user.RefreshToken.Replace('+', ' '));
+			if (!decodedToken.Equals(refreshtoken))
 		    {
 			return Unauthorized("Invalid Refresh Token");
 			
@@ -65,10 +96,18 @@ namespace Electron_7.Controllers
 			}
 			string token = CreateToken(user);
 			var newRefreshToken = GenerateRefreshToken();
-			SetRefreshToken(newRefreshToken);
-			return Ok(token);
+			SetRefreshToken(user, newRefreshToken).ConfigureAwait(false);
+			return Ok(new
+			{
+				token,
+				refreshToken = new
+				{
+					token = newRefreshToken.Token,
+					expires = newRefreshToken.Expired
+				}
+			});
 		}
-		[HttpGet("get-name"), Authorize(Roles = "Admin")]
+		[HttpGet("get-name")]
 		public ActionResult<string> GetName()
 		{
 			var userName = User?.Identity?.Name;
@@ -81,27 +120,35 @@ namespace Electron_7.Controllers
 			var refreshToken = new RefreshToken
 			{
 				Token = Convert.ToBase64String(RandomNumberGenerator.GetBytes(64)),
-				Expired = DateTime.Now.AddDays(7)
+				Created = DateTime.Now,
+				Expired = DateTime.Now.AddMinutes(59),
 			};
 			return refreshToken;
 		}
-		private void SetRefreshToken(RefreshToken newrefreshToken)
+		private async Task SetRefreshToken(User user, RefreshToken newRefreshToken)
 		{
 			var cookieOptions = new CookieOptions
 			{
 				HttpOnly = true,
-				Expires = newrefreshToken.Expired,
+				Expires = newRefreshToken.Expired,
 			};
-			Response.Cookies.Append("refreshToken", newrefreshToken.Token, cookieOptions);
-			user.RefreshToken = newrefreshToken.Token;
-			user.TokenCreated = newrefreshToken.Created;
-			user.TokenExpires = newrefreshToken.Expired;
+
+			Response.Cookies.Append("refreshToken", newRefreshToken.Token, cookieOptions);
+
+			user.RefreshToken = newRefreshToken.Token;
+			user.TokenCreated = newRefreshToken.Created;
+			user.TokenExpires = newRefreshToken.Expired;
+			user.LastLogIn=DateTime.Now;
+
+			_context.Entry(user).State = EntityState.Modified;
+			await _context.SaveChangesAsync();
 		}
 		private string CreateToken(User user)
 		{
 			List<Claim> claims = new List<Claim>
 {
 	new Claim(ClaimTypes.Name, user.Username),
+	new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
 	user.IsAdmin
 		? new Claim(ClaimTypes.Role, "Admin")
 		: new Claim(ClaimTypes.Role, "User")
